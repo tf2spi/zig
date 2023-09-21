@@ -86,16 +86,20 @@ pub fn relocate(phdrs: []elf.Phdr) void {
 
     var rel_addr: usize = 0;
     var rela_addr: usize = 0;
+    var relr_addr: usize = 0;
     var rel_size: usize = 0;
     var rela_size: usize = 0;
+    var relr_size: usize = 0;
     {
         var i: usize = 0;
         while (dynv[i].d_tag != elf.DT_NULL) : (i += 1) {
             switch (dynv[i].d_tag) {
                 elf.DT_REL => rel_addr = base_addr + dynv[i].d_val,
                 elf.DT_RELA => rela_addr = base_addr + dynv[i].d_val,
+                elf.DT_RELR => relr_addr = base_addr + dynv[i].d_val,
                 elf.DT_RELSZ => rel_size = dynv[i].d_val,
                 elf.DT_RELASZ => rela_size = dynv[i].d_val,
+                elf.DT_RELRSZ => relr_size = dynv[i].d_val,
                 else => {},
             }
         }
@@ -114,6 +118,26 @@ pub fn relocate(phdrs: []elf.Phdr) void {
         for (rela) |r| {
             if (r.r_type() != R_RELATIVE) continue;
             @as(*usize, @ptrFromInt(base_addr + r.r_offset)).* += base_addr + @as(usize, @bitCast(r.r_addend));
+        }
+    }
+    if (relr_addr != 0) {
+        const relr = std.mem.bytesAsSlice(elf.Relr, @as([*]u8, @ptrFromInt(relr_addr))[0..relr_size]);
+        var offset: elf.Relr = 0;
+        for (relr) |r| {
+            if ((r & 1) == 1) {
+                const next_offset: elf.Relr = offset + (@sizeOf(elf.Relr) * 8 - 1) * @sizeOf(elf.Relr);
+                var iter: elf.Relr = r;
+                while (iter != 0) {
+                    iter >>= 1;
+                    if ((iter & 1) != 0) @as(*usize, @ptrFromInt(base_addr + offset)).* += base_addr;
+                    offset += @sizeOf(elf.Relr);
+                }
+                offset = next_offset;
+            } else {
+                offset = r;
+                @as(*usize, @ptrFromInt(base_addr + offset)).* += base_addr;
+                offset += @sizeOf(elf.Relr);
+            }
         }
     }
 }
